@@ -25,8 +25,8 @@ export default function Navbar({ onBookNow }: NavbarProps) {
         <button
           type="button"
           onClick={onBookNow}
-          className="cursor-pointer rounded-[2px] border border-[#c99a2e] bg-transparent px-[24px] py-[13px] text-[12px] font-extrabold tracking-[1.2px] !text-[#f0cf78] transition-colors hover:bg-[#c99a2e] hover:text-[#182418] max-[700px]:px-[16px] max-[700px]:py-[12px] max-[700px]:text-[10px] max-[700px]:tracking-[0.8px]"
-        >
+          className="inline-block rounded-[2px] border border-[#c99a2e] bg-transparent px-[24px] py-[13px] text-[12px] font-extrabold tracking-[1.2px] !text-[#f0cf78] transition-colors hover:bg-[#c99a2e] hover:text-[#182418] max-[700px]:px-[16px] max-[700px]:py-[12px] max-[700px]:text-[10px] max-[700px]:tracking-[0.8px]"
+          >
           BOOK NOW
         </button>
 
