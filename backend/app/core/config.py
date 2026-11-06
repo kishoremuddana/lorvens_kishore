@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
+from pydantic import model_validator
 
 class Settings(BaseSettings):
     APP_NAME: str = "Lorvens API"
@@ -27,6 +27,15 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: str = ""
     SMTP_FROM_EMAIL: str = ""
     SMTP_USE_TLS: bool = True
+    
+    RAZORPAY_KEY_ID: str = ""
+    RAZORPAY_KEY_SECRET: str = ""
+    
+    APP_ENV: str = "development"
+
+    # Customer phone OTP only
+    CUSTOMER_OTP_MODE: str = "fixed"
+    CUSTOMER_TEST_OTP: str = ""
 
     model_config = SettingsConfigDict(
         env_file=(
@@ -36,6 +45,22 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+    @model_validator(mode="after")
+    def validate_customer_otp_settings(self):
+        self.APP_ENV = self.APP_ENV.strip().lower()
+        self.CUSTOMER_OTP_MODE = self.CUSTOMER_OTP_MODE.strip().lower()
+
+        if self.CUSTOMER_OTP_MODE not in {"fixed", "sms"}:
+            raise ValueError("CUSTOMER_OTP_MODE must be 'fixed' or 'sms'.")
+
+        if self.CUSTOMER_OTP_MODE == "fixed":
+            if self.APP_ENV == "production":
+                raise ValueError("Fixed customer OTP is not allowed in production.")
+
+            if not self.CUSTOMER_TEST_OTP.isdigit() or len(self.CUSTOMER_TEST_OTP) != 6:
+                raise ValueError("CUSTOMER_TEST_OTP must contain exactly 6 digits.")
+
+        return self
 
 
 @lru_cache

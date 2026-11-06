@@ -1,38 +1,46 @@
 import React from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
+
 import { LoginPage } from "../pages/LoginPage";
 import { DashboardPage } from "../pages/DashboardPage";
+import { ApplicationsPage } from "../pages/ApplicationsPage";
 import { DashboardLayout } from "../layouts/DashboardLayout";
 import { ProtectedRoute } from "./ProtectedRoute";
+import { UserDashboard } from "../pages/UserDashboard";
+import UserLogin from "../pages/UserLogin";
 
 export const AppRoutes: React.FC = () => {
   return (
     <Routes>
-      {/* PUBLIC AUTH ROUTE */}
-      <Route path="/login" element={<LoginPage />} />
+      <Route path="/admin/login" element={<LoginPage />} />
 
-      {/* PROTECTED ADMIN ROUTES */}
-      <Route element={<ProtectedRoute />}>
+      {/* Admin routes */}
+      <Route element={<ProtectedRoute allowedRole="admin" />}>
         <Route element={<DashboardLayout />}>
-          <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/admin/dashboard" element={<DashboardPage />} />
           <Route
-            path="/dashboard/applications"
+            path="/admin/dashboard/applications"
+            element={<ApplicationsPage />}
+          />
+          <Route
+            path="/admin/dashboard/members"
             element={<DashboardPage />}
           />
           <Route
-            path="/dashboard/members"
-            element={<DashboardPage />}
-          />
-          <Route
-            path="/dashboard/security"
+            path="/admin/dashboard/security"
             element={<DashboardPage />}
           />
         </Route>
       </Route>
 
-      {/* ROOT & CATCH-ALL REDIRECTS */}
-      <Route path="/" element={<Navigate to="/dashboard" replace />} />
-      <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      {/* Customer route */}
+      <Route path="/login" element={<UserLogin />} />
+      <Route element={<ProtectedRoute allowedRole="user" />}>
+        <Route path="/user/dashboard" element={<UserDashboard />} />
+      </Route>
+
+      <Route path="/" element={<Navigate to="/admin/login" replace />} />
+      <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>
   );
 };

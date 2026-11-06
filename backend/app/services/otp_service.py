@@ -1,3 +1,4 @@
+
 import hashlib
 import hmac
 import secrets
@@ -32,12 +33,12 @@ class OTPExpiredError(OTPError):
 
 
 class OTPMaxAttemptsError(OTPError):
-    """Raised when the maximum number of incorrect OTP verification attempts is reached."""
+    """Raised when the maximum number of incorrect OTP attempts is reached."""
     pass
 
 
 class OTPInvalidError(OTPError):
-    """Raised when an incorrect OTP code is entered."""
+    """Raised when an incorrect OTP is entered."""
     pass
 
 
@@ -47,7 +48,7 @@ class OTPNotFoundError(OTPError):
 
 
 def generate_otp() -> str:
-    """Generate a cryptographically secure numeric OTP using CSPRNG."""
+    """Generate a cryptographically secure numeric OTP."""
     return "".join(
         str(secrets.randbelow(10))
         for _ in range(settings.OTP_LENGTH)
@@ -55,7 +56,7 @@ def generate_otp() -> str:
 
 
 def hash_otp(otp: str) -> str:
-    """Hash OTP using HMAC-SHA256 with JWT secret key."""
+    """Hash OTP using HMAC-SHA256 with the JWT secret key."""
     return hmac.new(
         settings.JWT_SECRET_KEY.encode(),
         otp.encode(),
@@ -64,12 +65,16 @@ def hash_otp(otp: str) -> str:
 
 
 def verify_otp_hash(otp: str, stored_hash: str) -> bool:
-    """Safely compare OTP hashes using constant-time comparison."""
-    return hmac.compare_digest(hash_otp(otp), stored_hash)
+    """Compare OTP hashes using constant-time comparison."""
+    return hmac.compare_digest(
+        hash_otp(otp),
+        stored_hash,
+    )
 
 
 def check_otp_rate_limit(db: Session, user_id) -> None:
-    """Check cooldown and hourly limits for an administrator."""
+    """Check OTP resend cooldown and hourly request limits."""
+
     now = datetime.now(timezone.utc)
 
     latest_otp = db.scalar(
@@ -81,17 +86,28 @@ def check_otp_rate_limit(db: Session, user_id) -> None:
 
     if latest_otp:
         created_at = latest_otp.created_at
+
         if created_at.tzinfo is None:
-            created_at = created_at.replace(tzinfo=timezone.utc)
+            created_at = created_at.replace(
+                tzinfo=timezone.utc
+            )
 
         elapsed = (now - created_at).total_seconds()
+
         if elapsed < settings.OTP_RESEND_COOLDOWN_SECONDS:
-            remaining = max(1, int(settings.OTP_RESEND_COOLDOWN_SECONDS - elapsed))
+            remaining = max(
+                1,
+                int(
+                    settings.OTP_RESEND_COOLDOWN_SECONDS - elapsed
+                ),
+            )
+
             raise OTPCooldownError(
                 f"Please wait {remaining} seconds before requesting another OTP."
             )
 
     one_hour_ago = now - timedelta(hours=1)
+
     requests_count = db.scalar(
         select(func.count())
         .select_from(EmailOTP)
@@ -107,14 +123,35 @@ def check_otp_rate_limit(db: Session, user_id) -> None:
         )
 
 
-def create_otp(db: Session, user_id) -> tuple[EmailOTP, str]:
+def create_otp(
+    db: Session,
+    user_id,
+    otp_override: str | None = None,
+) -> tuple[EmailOTP, str]:
     """
-    Safely create and persist a new OTP.
+    Create and persist a new OTP.
 
-    Uses PostgreSQL row-level locking on the user record to prevent
-    concurrent requests from bypassing rate limits or generating multiple active OTPs.
+    Admin:
+        Uses a randomly generated OTP.
+
+    Customer development login:
+        Can use the configured fixed OTP through otp_override.
+
+    The OTP is stored as a hash and the previous unused OTP
+    is invalidated.
     """
-    # 1. Lock user row to serialize OTP operations for this user
+
+    # Validate an explicitly supplied OTP.
+    if otp_override is not None:
+        if (
+            not otp_override.isdigit()
+            or len(otp_override) != settings.OTP_LENGTH
+        ):
+            raise ValueError(
+                f"OTP must contain exactly {settings.OTP_LENGTH} numeric digits."
+            )
+
+    # Lock the user row to serialize OTP operations.
     db.execute(
         select(User.id)
         .where(User.id == user_id)
@@ -123,10 +160,10 @@ def create_otp(db: Session, user_id) -> tuple[EmailOTP, str]:
 
     now = datetime.now(timezone.utc)
 
-    # 2. Check rate limits atomically
+    # Check resend cooldown and hourly limits.
     check_otp_rate_limit(db, user_id)
 
-    # 3. Invalidate all previous unused OTPs for this admin
+    # Invalidate all previous unused OTPs for this user.
     previous_otps = db.scalars(
         select(EmailOTP)
         .where(
@@ -139,12 +176,20 @@ def create_otp(db: Session, user_id) -> tuple[EmailOTP, str]:
     for previous in previous_otps:
         previous.consumed_at = now
 
-    # 4. Generate and store new OTP
-    otp = generate_otp()
+    # Generate random OTP unless an override was explicitly supplied.
+    otp = (
+        otp_override
+        if otp_override is not None
+        else generate_otp()
+    )
+
+    # Store only the hashed OTP.
     otp_record = EmailOTP(
         user_id=user_id,
         otp_hash=hash_otp(otp),
-        expires_at=now + timedelta(minutes=settings.OTP_EXPIRE_MINUTES),
+        expires_at=now + timedelta(
+            minutes=settings.OTP_EXPIRE_MINUTES
+        ),
         attempts=0,
         created_at=now,
     )
@@ -156,13 +201,16 @@ def create_otp(db: Session, user_id) -> tuple[EmailOTP, str]:
     return otp_record, otp
 
 
-def verify_otp(db: Session, user_id, otp: str) -> bool:
+def verify_otp(
+    db: Session,
+    user_id,
+    otp: str,
+) -> bool:
     """
-    Verify OTP validity, expiration, attempt count, and single-use status.
+    Verify OTP validity, expiration, attempt count and single-use status.
+    """
 
-    Uses row-level locking to prevent concurrent requests from racing on verification.
-    """
-    # Lock the user row to serialize verification attempts
+    # Lock the user row to serialize verification attempts.
     db.execute(
         select(User.id)
         .where(User.id == user_id)
@@ -183,54 +231,83 @@ def verify_otp(db: Session, user_id, otp: str) -> bool:
     )
 
     if not otp_record:
-        # Check if latest OTP was consumed or expired
+
+        # Check the latest OTP to return a meaningful error.
         latest = db.scalar(
             select(EmailOTP)
             .where(EmailOTP.user_id == user_id)
             .order_by(desc(EmailOTP.created_at))
             .limit(1)
         )
+
         if latest:
+
             if latest.attempts >= settings.OTP_MAX_ATTEMPTS:
                 raise OTPMaxAttemptsError(
                     "Maximum OTP verification attempts exceeded."
                 )
-            latest_exp = latest.expires_at
-            if latest_exp.tzinfo is None:
-                latest_exp = latest_exp.replace(tzinfo=timezone.utc)
-            if latest_exp <= now:
-                raise OTPExpiredError("OTP has expired.")
 
-        raise OTPNotFoundError("Invalid or expired OTP.")
+            latest_exp = latest.expires_at
+
+            if latest_exp.tzinfo is None:
+                latest_exp = latest_exp.replace(
+                    tzinfo=timezone.utc
+                )
+
+            if latest_exp <= now:
+                raise OTPExpiredError(
+                    "OTP has expired."
+                )
+
+        raise OTPNotFoundError(
+            "Invalid or expired OTP."
+        )
 
     expires_at = otp_record.expires_at
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
 
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(
+            tzinfo=timezone.utc
+        )
+
+    # Check expiration.
     if expires_at <= now:
         otp_record.consumed_at = now
         db.commit()
-        raise OTPExpiredError("OTP has expired.")
 
+        raise OTPExpiredError(
+            "OTP has expired."
+        )
+
+    # Check maximum attempts.
     if otp_record.attempts >= settings.OTP_MAX_ATTEMPTS:
         otp_record.consumed_at = now
         db.commit()
+
         raise OTPMaxAttemptsError(
             "Maximum OTP verification attempts exceeded."
         )
 
+    # Verify OTP.
     if not verify_otp_hash(otp, otp_record.otp_hash):
+
         otp_record.attempts += 1
+
         if otp_record.attempts >= settings.OTP_MAX_ATTEMPTS:
             otp_record.consumed_at = now
             db.commit()
+
             raise OTPMaxAttemptsError(
                 "Maximum OTP verification attempts exceeded."
             )
-        db.commit()
-        raise OTPInvalidError("Invalid OTP.")
 
-    # Successful verification - mark consumed immediately
+        db.commit()
+
+        raise OTPInvalidError(
+            "Invalid OTP."
+        )
+
+    # Successful verification: consume OTP immediately.
     otp_record.consumed_at = now
     db.commit()
 

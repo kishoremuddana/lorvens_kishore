@@ -1,3 +1,4 @@
+
 from typing import Any
 from uuid import UUID
 
@@ -10,7 +11,9 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import decode_access_token
 from app.models.user import User
+from app.models.payment import MembershipPayment
 from app.services.token_service import is_token_revoked
+
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -19,7 +22,7 @@ def get_current_user_and_token(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     db: Session = Depends(get_db),
 ) -> tuple[User, dict[str, Any]]:
-    """Validate Bearer token, check expiration, signature, and revocation."""
+    """Validate Bearer token, signature, expiration, and revocation."""
 
     if credentials is None:
         raise HTTPException(
@@ -68,9 +71,12 @@ def get_current_user_and_token(
 
 
 def get_current_user(
-    auth_data: tuple[User, dict[str, Any]] = Depends(get_current_user_and_token),
+    auth_data: tuple[User, dict[str, Any]] = Depends(
+        get_current_user_and_token
+    ),
 ) -> User:
-    """Return the authenticated User model."""
+    """Return the authenticated user."""
+
     user, _ = auth_data
     return user
 
@@ -78,7 +84,7 @@ def get_current_user(
 def get_admin_user(
     current_user: User = Depends(get_current_user),
 ) -> User:
-    """Validate that the authenticated user is an active, verified admin."""
+    """Validate an active and verified admin."""
 
     if not current_user.is_active:
         raise HTTPException(
@@ -99,9 +105,12 @@ def get_admin_user(
 
 
 def get_authenticated_admin_context(
-    auth_data: tuple[User, dict[str, Any]] = Depends(get_current_user_and_token),
+    auth_data: tuple[User, dict[str, Any]] = Depends(
+        get_current_user_and_token
+    ),
 ) -> tuple[User, dict[str, Any]]:
-    """Return authenticated admin user and decoded JWT claims."""
+    """Return authenticated admin and JWT claims."""
+
     user, payload = auth_data
 
     if not user.is_active:
@@ -120,3 +129,41 @@ def get_authenticated_admin_context(
         )
 
     return user, payload
+
+
+
+def get_customer_user(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> User:
+    """Validate an active customer with a paid membership and sent welcome email."""
+
+    if not current_user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Customer account is inactive.",
+        )
+
+    if current_user.role != "user":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Customer access required.",
+        )
+
+    paid_membership = db.scalar(
+        select(MembershipPayment.id)
+        .where(
+            MembershipPayment.email == current_user.email.lower(),
+            MembershipPayment.status == "paid",
+            MembershipPayment.welcome_email_sent.is_(True),
+        )
+        .limit(1)
+    )
+
+    if not paid_membership:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Paid membership with successful welcome email required.",
+        )
+
+    return current_user

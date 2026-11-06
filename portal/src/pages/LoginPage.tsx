@@ -9,6 +9,7 @@ import { useAuth } from "../hooks/useAuth";
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
   const {
+    user,
     sendOtp,
     verifyOtp,
     isAuthenticated,
@@ -28,12 +29,19 @@ export const LoginPage: React.FC = () => {
   const [localError, setLocalError] = useState<string | null>(null);
 
   // If already authenticated, redirect to dashboard
-  useEffect(() => {
-    if (isAuthenticated) {
-      navigate("/dashboard", { replace: true });
-    }
-  }, [isAuthenticated, navigate]);
+  // Redirect only when an authenticated user is available.
+useEffect(() => {
+  if (isLoading) return;
 
+  if (isAuthenticated && user) {
+    navigate(
+      user.role === "admin"
+  ? "/admin/dashboard"
+  : "/user/dashboard",
+      { replace: true }
+    );
+  }
+}, [isAuthenticated, isLoading, user, navigate]);
   // Resend cooldown timer
   useEffect(() => {
     if (step !== "otp" || cooldown <= 0) return;
@@ -50,7 +58,7 @@ export const LoginPage: React.FC = () => {
 
     const trimmed = emailInput.trim().toLowerCase();
     if (!trimmed) {
-      setLocalError("Please enter your admin email address.");
+      setLocalError("Please enter your registered email address.");
       return;
     }
 
@@ -79,24 +87,36 @@ export const LoginPage: React.FC = () => {
   };
 
   const handleVerifyOtp = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    setLocalError(null);
-    clearError();
+  if (e) e.preventDefault();
 
-    const fullCode = otpDigits.join("");
-    if (fullCode.length !== 6) {
-      setLocalError("Please enter the complete 6-digit OTP code.");
-      return;
-    }
+  setLocalError(null);
+  clearError();
 
-    try {
-      await verifyOtp(fullCode);
-      navigate("/dashboard", { replace: true });
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Invalid or expired OTP.";
-      setLocalError(msg);
+  const fullCode = otpDigits.join("");
+
+  if (fullCode.length !== 6) {
+    setLocalError("Please enter the complete 6-digit OTP code.");
+    return;
+  }
+
+  try {
+    // Use the user returned directly by verifyOtp.
+    const authenticatedUser = await verifyOtp(fullCode);
+
+    if (authenticatedUser.role === "admin") {
+      navigate("/admin/dashboard", { replace: true });
+    } else if (authenticatedUser.role === "user") {
+      navigate("/user/dashboard", { replace: true });
+    } else {
+      setLocalError("Your account does not have an authorized role.");
     }
-  };
+  } catch (err: unknown) {
+    const msg =
+      err instanceof Error ? err.message : "Invalid or expired OTP.";
+
+    setLocalError(msg);
+  }
+};
 
   // Format cooldown seconds as 00:SS
   const formatTimer = (seconds: number) => {
@@ -131,7 +151,7 @@ export const LoginPage: React.FC = () => {
               Welcome Back
             </h1>
             <p className="mt-2 text-xs sm:text-sm text-[#B8C2BB] leading-relaxed">
-              Enter your registered email address to access the admin portal.
+              Enter your registered email address to access your Lorvens Club account.
             </p>
 
             <form onSubmit={handleSendOtp} className="mt-6">
